@@ -47,17 +47,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let highScore = localStorage.getItem('snakeHighScore') || 0;
     let gameSpeed = 10; // Frames per second
     let gameRunning = false;
+    let gamePaused = false;
     let gameLoopId = null;
     let startTime = 0;
     let elapsedTime = 0;
+    let pausedTime = 0;
     let timerInterval = null;
     let musicEnabled = true;
     let soundEffectsEnabled = true;
     let musicVolume = 0.7;
     let soundEffectsVolume = 0.7;
     let lastRenderTime = 0;
-    let moveSoundCooldown = 0;
-    let isPlayingSoundEffect = false;
     
     // ============= LOAD ASSETS =============
     const assets = {
@@ -108,6 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateScore();
         direction = 'right';
         nextDirection = 'right';
+        gamePaused = false;
         
         // Reset UI
         newHighScoreElement.classList.add('hidden');
@@ -118,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Mulai timer
         startTime = Date.now();
         elapsedTime = 0;
+        pausedTime = 0;
         updateTimer();
         timerInterval = setInterval(updateTimer, 1000);
         
@@ -144,33 +146,23 @@ document.addEventListener('DOMContentLoaded', () => {
     function playSoundEffect(sound) {
         if (!soundEffectsEnabled) return;
         
-        // Kurangi volume musik saat sound effect diputar
-        backgroundMusic.volume = Math.max(0.1, musicVolume - 0.3);
-        isPlayingSoundEffect = true;
-        
         sound.currentTime = 0;
         sound.play().catch(e => console.log("Audio play failed:", e));
-        
-        // Kembalikan volume musik setelah sound effect selesai
-        sound.onended = () => {
-            backgroundMusic.volume = musicVolume;
-            isPlayingSoundEffect = false;
-        };
     }
     
     // ============= GENERATOR MAKANAN =============
     function generateFood() {
-        const x = Math.floor(Math.random() * GRID_WIDTH);
-        const y = Math.floor(Math.random() * GRID_HEIGHT);
-        
-        // Pastikan makanan tidak muncul di tubuh ular
-        for (let part of snake) {
-            if (part.x === x && part.y === y) {
-                return generateFood();
-            }
-        }
-        
-        food = {x, y};
+        do {
+            food = {
+                x: Math.floor(Math.random() * GRID_WIDTH),
+                y: Math.floor(Math.random() * GRID_HEIGHT)
+            };
+        } while (isSnakeCollision(food.x, food.y));
+    }
+    
+    // ============= CHECK COLLISION WITH SNAKE =============
+    function isSnakeCollision(x, y) {
+        return snake.some(segment => segment.x === x && segment.y === y);
     }
     
     // ============= UPDATE SCORE =============
@@ -181,8 +173,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // ============= UPDATE TIMER =============
     function updateTimer() {
-        if (gameRunning) {
-            elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+        if (gameRunning && !gamePaused) {
+            elapsedTime = Math.floor((Date.now() - startTime - pausedTime) / 1000);
             const minutes = Math.floor(elapsedTime / 60);
             const seconds = elapsedTime % 60;
             timerElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
@@ -199,68 +191,88 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    // ============= GET DIRECTION BETWEEN TWO POINTS =============
+    function getDirection(from, to) {
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        
+        // Handle wrapping
+        const wrappedDx = Math.abs(dx) > 1 ? (dx > 0 ? -1 : 1) : dx;
+        const wrappedDy = Math.abs(dy) > 1 ? (dy > 0 ? -1 : 1) : dy;
+        
+        if (wrappedDx === 1) return 'right';
+        if (wrappedDx === -1) return 'left';
+        if (wrappedDy === 1) return 'down';
+        if (wrappedDy === -1) return 'up';
+        
+        return 'right'; // default
+    }
+    
     // ============= GET SNAKE PART IMAGE =============
     function getSnakePartImage(segment, index) {
         if (index === 0) {
-            // Head
+            // Head - gunakan direction saat ini
             switch(direction) {
                 case 'up': return assets.head_up;
                 case 'down': return assets.head_down;
                 case 'left': return assets.head_left;
                 case 'right': return assets.head_right;
+                default: return assets.head_right;
             }
         } else if (index === snake.length - 1) {
-            // Tail - determine direction based on previous segment
-            const prev = snake[index - 1];
-            
-            // Calculate direction with wrapping consideration
-            let dx = segment.x - prev.x;
-            let dy = segment.y - prev.y;
-            
-            // Handle wrapping
-            if (dx > 1) dx = -1;
-            if (dx < -1) dx = 1;
-            if (dy > 1) dy = -1;
-            if (dy < -1) dy = 1;
-            
-            if (dx === 1) return assets.tail_left;
-            if (dx === -1) return assets.tail_right;
-            if (dy === 1) return assets.tail_up;
-            if (dy === -1) return assets.tail_down;
+            // Tail - arah berdasarkan dari mana ekor berasal
+            if (snake.length > 1) {
+                const prev = snake[index - 1];
+                const tailDirection = getDirection(prev, segment);
+                
+                switch(tailDirection) {
+                    case 'up': return assets.tail_up;
+                    case 'down': return assets.tail_down;
+                    case 'left': return assets.tail_left;
+                    case 'right': return assets.tail_right;
+                    default: return assets.tail_right;
+                }
+            }
+            return assets.tail_right;
         } else {
-            // Body - determine type based on adjacent segments
+            // Body - tentukan berdasarkan segmen sebelum dan sesudah
             const prev = snake[index - 1];
             const next = snake[index + 1];
             
-            // Calculate differences with wrapping
-            let dxPrev = segment.x - prev.x;
-            let dyPrev = segment.y - prev.y;
-            let dxNext = next.x - segment.x;
-            let dyNext = next.y - segment.y;
-            
-            // Handle wrapping
-            if (dxPrev > 1) dxPrev = -1;
-            if (dxPrev < -1) dxPrev = 1;
-            if (dyPrev > 1) dyPrev = -1;
-            if (dyPrev < -1) dyPrev = 1;
-            if (dxNext > 1) dxNext = -1;
-            if (dxNext < -1) dxNext = 1;
-            if (dyNext > 1) dyNext = -1;
-            if (dyNext < -1) dyNext = 1;
+            const dirFromPrev = getDirection(prev, segment);
+            const dirToNext = getDirection(segment, next);
             
             // Straight segments
-            if (dxPrev === 0 && dxNext === 0) return assets.body_vertical;
-            if (dyPrev === 0 && dyNext === 0) return assets.body_horizontal;
+            if ((dirFromPrev === 'left' || dirFromPrev === 'right') && 
+                (dirToNext === 'left' || dirToNext === 'right')) {
+                return assets.body_horizontal;
+            }
+            if ((dirFromPrev === 'up' || dirFromPrev === 'down') && 
+                (dirToNext === 'up' || dirToNext === 'down')) {
+                return assets.body_vertical;
+            }
             
             // Corner segments
-            if ((dxPrev === 1 && dyNext === -1) || (dyPrev === 1 && dxNext === -1)) return assets.body_bottomleft;
-            if ((dxPrev === -1 && dyNext === -1) || (dyPrev === 1 && dxNext === 1)) return assets.body_bottomright;
-            if ((dxPrev === 1 && dyNext === 1) || (dyPrev === -1 && dxNext === -1)) return assets.body_topleft;
-            if ((dxPrev === -1 && dyNext === 1) || (dyPrev === -1 && dxNext === 1)) return assets.body_topright;
+            if ((dirFromPrev === 'right' && dirToNext === 'up') || 
+                (dirFromPrev === 'down' && dirToNext === 'left')) {
+                return assets.body_topleft;
+            }
+            if ((dirFromPrev === 'left' && dirToNext === 'up') || 
+                (dirFromPrev === 'down' && dirToNext === 'right')) {
+                return assets.body_topright;
+            }
+            if ((dirFromPrev === 'right' && dirToNext === 'down') || 
+                (dirFromPrev === 'up' && dirToNext === 'left')) {
+                return assets.body_bottomleft;
+            }
+            if ((dirFromPrev === 'left' && dirToNext === 'down') || 
+                (dirFromPrev === 'up' && dirToNext === 'right')) {
+                return assets.body_bottomright;
+            }
+            
+            // Default to horizontal if can't determine
+            return assets.body_horizontal;
         }
-        
-        // Default to horizontal body part
-        return assets.body_horizontal;
     }
     
     // ============= DRAW GAME =============
@@ -290,7 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const segment = snake[i];
             const img = getSnakePartImage(segment, i);
             
-            if (img.complete) {
+            if (img && img.complete) {
                 ctx.drawImage(img, segment.x * GRID_SIZE, segment.y * GRID_SIZE, GRID_SIZE, GRID_SIZE);
             } else {
                 // Fallback if image not loaded
@@ -302,6 +314,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // ============= UPDATE GAME STATE =============
     function update() {
+        if (gamePaused) return;
+        
         // Update direction
         direction = nextDirection;
         
@@ -321,11 +335,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (head.y >= GRID_HEIGHT) head.y = 0;
         
         // Check collision with self
-        for (let i = 0; i < snake.length; i++) {
-            if (snake[i].x === head.x && snake[i].y === head.y) {
-                gameOver();
-                return;
-            }
+        if (isSnakeCollision(head.x, head.y)) {
+            gameOver();
+            return;
         }
         
         // Add new head
@@ -340,7 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
             playSoundEffect(eatSound);
             
             // Check for level up (every 50 points)
-            if (score % 50 === 0) {
+            if (score % 50 === 0 && score > 0) {
                 playSoundEffect(levelUpSound);
             }
             
@@ -359,7 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function gameLoop(currentTime) {
         if (!gameRunning) return;
         
-        window.requestAnimationFrame(gameLoop);
+        gameLoopId = window.requestAnimationFrame(gameLoop);
         
         const secondsSinceLastRender = (currentTime - lastRenderTime) / 1000;
         if (secondsSinceLastRender < 1 / gameSpeed) return;
@@ -373,6 +385,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // ============= GAME OVER =============
     function gameOver() {
         gameRunning = false;
+        gamePaused = false;
+        
+        // Stop timer
+        if (timerInterval) clearInterval(timerInterval);
         
         // Stop background music
         backgroundMusic.pause();
@@ -387,34 +403,51 @@ document.addEventListener('DOMContentLoaded', () => {
             newHighScoreElement.classList.remove('hidden');
             
             // Play new high score sound if enabled
-            playSoundEffect(newHighscoreSound);
+            setTimeout(() => playSoundEffect(newHighscoreSound), 500);
         }
         
         // Show game over screen
         finalScoreElement.textContent = score;
         gameOverElement.classList.remove('hidden');
         
-        // Enable start button again
+        // Reset UI buttons
         startBtn.disabled = false;
+        pauseBtn.disabled = true;
+        pauseBtn.classList.remove('hidden');
+        resumeBtn.classList.add('hidden');
+        
+        // Cancel game loop
+        if (gameLoopId) {
+            cancelAnimationFrame(gameLoopId);
+            gameLoopId = null;
+        }
     }
     
     // ============= TOGGLE PAUSE =============
     function togglePause() {
         if (!gameRunning) return;
         
-        if (pauseElement.classList.contains('hidden')) {
+        if (!gamePaused) {
             // Pause the game
+            gamePaused = true;
             pauseElement.classList.remove('hidden');
             pauseBtn.classList.add('hidden');
             resumeBtn.classList.remove('hidden');
+            
+            // Record pause time
+            pausedTime += Date.now();
             
             // Pause background music
             backgroundMusic.pause();
         } else {
             // Resume the game
+            gamePaused = false;
             pauseElement.classList.add('hidden');
             pauseBtn.classList.remove('hidden');
             resumeBtn.classList.add('hidden');
+            
+            // Adjust for paused time
+            pausedTime = Date.now() - pausedTime;
             
             // Resume background music if enabled
             if (musicEnabled) {
@@ -423,7 +456,6 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Resume game loop
             lastRenderTime = performance.now();
-            window.requestAnimationFrame(gameLoop);
         }
     }
     
@@ -436,8 +468,9 @@ document.addEventListener('DOMContentLoaded', () => {
             resumeBtn.classList.add('hidden');
             pauseBtn.classList.remove('hidden');
             gameRunning = true;
+            gamePaused = false;
             lastRenderTime = performance.now();
-            window.requestAnimationFrame(gameLoop);
+            gameLoopId = window.requestAnimationFrame(gameLoop);
             startBtn.disabled = true;
             pauseBtn.disabled = false;
         }
@@ -445,52 +478,64 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // ============= RESTART GAME =============
     function restartGame() {
-        initGame();
-        gameOverElement.classList.add('hidden');
-        pauseElement.classList.add('hidden');
-        resumeBtn.classList.add('hidden');
-        pauseBtn.classList.remove('hidden');
-        gameRunning = true;
-        lastRenderTime = performance.now();
-        window.requestAnimationFrame(gameLoop);
-        startBtn.disabled = true;
-        pauseBtn.disabled = false;
+        // Stop current game
+        gameRunning = false;
+        gamePaused = false;
+        if (gameLoopId) {
+            cancelAnimationFrame(gameLoopId);
+            gameLoopId = null;
+        }
+        if (timerInterval) clearInterval(timerInterval);
+        
+        // Start new game
+        startGame();
     }
     
     // ============= EVENT LISTENERS =============
     // Keyboard controls
     document.addEventListener('keydown', (e) => {
-        if (!gameRunning) return;
+        if (!gameRunning || gamePaused) return;
         
         switch(e.key) {
             case 'ArrowUp':
             case 'w':
             case 'W':
                 if (direction !== 'down') nextDirection = 'up';
+                e.preventDefault();
                 break;
             case 'ArrowDown':
             case 's':
             case 'S':
                 if (direction !== 'up') nextDirection = 'down';
+                e.preventDefault();
                 break;
             case 'ArrowLeft':
             case 'a':
             case 'A':
                 if (direction !== 'right') nextDirection = 'left';
+                e.preventDefault();
                 break;
             case 'ArrowRight':
             case 'd':
             case 'D':
                 if (direction !== 'left') nextDirection = 'right';
+                e.preventDefault();
                 break;
-            case ' ':
+        }
+    });
+    
+    // Pause controls
+    document.addEventListener('keydown', (e) => {
+        if (!gameRunning) return;
+        
+        if (e.key === ' ' || e.key === 'Spacebar') {
+            togglePause();
+            e.preventDefault();
+        } else if (e.key === 'Escape') {
+            if (gamePaused) {
                 togglePause();
-                break;
-            case 'Escape':
-                if (!pauseElement.classList.contains('hidden')) {
-                    togglePause();
-                }
-                break;
+            }
+            e.preventDefault();
         }
     });
     
@@ -519,20 +564,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Close settings
     closeSettings.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
-        // Save settings
-        musicEnabled = musicToggle.checked;
-        soundEffectsEnabled = soundEffectsToggle.checked;
-        musicVolume = parseFloat(musicVolumeSlider.value);
-        soundEffectsVolume = parseFloat(soundEffectsVolumeSlider.value);
-        
-        // Update audio based on settings
-        updateAudioVolumes();
-        
-        if (musicEnabled && gameRunning && pauseElement.classList.contains('hidden')) {
-            backgroundMusic.play().catch(e => console.log("Audio play failed:", e));
-        } else {
-            backgroundMusic.pause();
-        }
     });
     
     // Close credits
@@ -544,42 +575,16 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('click', (e) => {
         if (e.target === settingsModal) {
             settingsModal.classList.add('hidden');
-            musicEnabled = musicToggle.checked;
-            soundEffectsEnabled = soundEffectsToggle.checked;
-            musicVolume = parseFloat(musicVolumeSlider.value);
-            soundEffectsVolume = parseFloat(soundEffectsVolumeSlider.value);
-            
-            // Update audio based on settings
-            updateAudioVolumes();
-            
-            if (musicEnabled && gameRunning && pauseElement.classList.contains('hidden')) {
-                backgroundMusic.play().catch(e => console.log("Audio play failed:", e));
-            } else {
-                backgroundMusic.pause();
-            }
         }
         if (e.target === creditsModal) {
             creditsModal.classList.add('hidden');
         }
     });
     
-    // Volume sliders
-    musicVolumeSlider.addEventListener('input', () => {
-        musicVolume = parseFloat(musicVolumeSlider.value);
-        if (!isPlayingSoundEffect) {
-            backgroundMusic.volume = musicVolume;
-        }
-    });
-    
-    soundEffectsVolumeSlider.addEventListener('input', () => {
-        soundEffectsVolume = parseFloat(soundEffectsVolumeSlider.value);
-        updateAudioVolumes();
-    });
-    
-    // Toggle switches
+    // Audio controls
     musicToggle.addEventListener('change', () => {
         musicEnabled = musicToggle.checked;
-        if (musicEnabled && gameRunning && pauseElement.classList.contains('hidden')) {
+        if (musicEnabled && gameRunning && !gamePaused) {
             backgroundMusic.play().catch(e => console.log("Audio play failed:", e));
         } else {
             backgroundMusic.pause();
@@ -590,40 +595,51 @@ document.addEventListener('DOMContentLoaded', () => {
         soundEffectsEnabled = soundEffectsToggle.checked;
     });
     
+    musicVolumeSlider.addEventListener('input', () => {
+        musicVolume = parseFloat(musicVolumeSlider.value);
+        backgroundMusic.volume = musicVolume;
+    });
+    
+    soundEffectsVolumeSlider.addEventListener('input', () => {
+        soundEffectsVolume = parseFloat(soundEffectsVolumeSlider.value);
+        updateAudioVolumes();
+    });
+    
     // ============= INITIALIZATION =============
     updateScore();
     
-    // Draw initial state after images are loaded
+    // Wait for images to load
     let imagesLoaded = 0;
     const totalImages = Object.keys(assets).length;
     
+    function checkImagesLoaded() {
+        imagesLoaded++;
+        if (imagesLoaded === totalImages) {
+            draw();
+        }
+    }
+    
+    // Load all images
     for (const key in assets) {
-        assets[key].onload = () => {
-            imagesLoaded++;
-            if (imagesLoaded === totalImages) {
-                draw();
-            }
-        };
-        
-        // Handle image loading errors
+        assets[key].onload = checkImagesLoaded;
         assets[key].onerror = () => {
-            console.error(`Failed to load image: ${key}`);
-            imagesLoaded++;
-            if (imagesLoaded === totalImages) {
-                draw();
-            }
+            console.warn(`Failed to load image: ${key}`);
+            checkImagesLoaded();
         };
     }
     
-    // Disable pause button initially
+    // Initial setup
     pauseBtn.disabled = true;
-    
-    // Set initial toggle states
     musicToggle.checked = musicEnabled;
     soundEffectsToggle.checked = soundEffectsEnabled;
     musicVolumeSlider.value = musicVolume;
     soundEffectsVolumeSlider.value = soundEffectsVolume;
     
     // Initial draw
+    initGame();
+    gameRunning = false;
+    gamePaused = false;
+    if (timerInterval) clearInterval(timerInterval);
+    backgroundMusic.pause();
     draw();
 });
